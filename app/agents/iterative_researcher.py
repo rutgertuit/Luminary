@@ -1,0 +1,420 @@
+import asyncio
+import json
+import logging
+import os
+import re
+
+from google.adk.agents import ParallelAgent
+from google.adk.runners import Runner
+from google.adk.sessions import InMemorySessionService
+from google.genai import types
+
+from app.agents.compressor import compress_findings
+from app.agents.deep_research import build_researcher
+from app.agents.gap_analyzer import build_gap_analyzer
+from app.agents.json_utils import parse_json_response
+from app.agents.synthesizer import build_synthesizer
+from app.models.research_result import StudyResult
+from app.services.model_router import get_model_for_phase, get_gemini_model
+from app.services import openai_client as openai_svc
+from app.services.executors import get_io_executor
+from app.services.source_registry import SourceRegistry
+from app.services.source_scorer import score_url
+
+logger = logging.getLogger(__name__)
+
+# Matches both web_search's `[Source: title - https://url]` format and
+# pull_sources's `[Source: https://url] tag` format.
+_URL_TAG_RE = re.compile(r"\[Source:\s*(?P<body>[^\]]+)\]")
+_URL_RE = re.compile(r"https?://[^\s\]\)]+")
+
+
+def _extract_sources(text: str) -> list[tuple[str, str]]:
+    """Return list of (url, title_or_empty) extracted from researcher output.
+
+    Captures both tag formats and bare URLs. Deduplicates by URL while
+    preserving order.
+    """
+    if not text:
+        return []
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for m in _URL_TAG_RE.finditer(text):
+        body = m.group("body")
+        urls = _URL_RE.findall(body)
+        if not urls:
+            continue
+        url = urls[0]
+        if url in seen:
+            continue
+        title = body.split(url)[0].strip().rstrip("-").strip()
+        found.append((url, title))
+        seen.add(url)
+    for m in _URL_RE.finditer(text):
+        u = m.group(0)
+        if u in seen:
+            continue
+        found.append((u, ""))
+        seen.add(u)
+    return found
+
+
+APP_NAME = "luminary_research"
+MODEL = get_gemini_model()
+ROUND_MAX_RETRIES = 2
+ROUND_RETRY_BACKOFF = 5
+
+
+async def run_iterative_study(
+    study_index: int,
+    study: dict,
+    session_service: InMemorySessionService,
+    model: str = MODEL,
+    max_rounds: int = 3,
+    researcher_builder=None,
+    source_registry: SourceRegistry | None = None,
+) -> StudyResult:
+    """Run iterative deep research for a single study.
+
+    Each round: parallel researchers → gap analyzer → decide whether to continue.
+    After all rounds: per-study synthesis.
+    """
+    title = study.get("title", f"Study {study_index}")
+    angle = study.get("angle", "")
+    questions = study.get("questions", [])
+    if not questions:
+        questions = [title]
+
+    result = StudyResult(title=title, angle=angle, questions=questions)
+    result.source_floor = int(study.get("source_floor", 8) or 8)
+    v2_on = os.getenv("LUMINARY_V2_PIPELINE", "") == "1"
+    state = {}
+
+    for round_idx in range(max_rounds):
+        logger.info("Study %d '%s' — round %d with %d questions", study_index, title, round_idx, len(questions))
+
+        # Build parallel researchers for this round's questions
+        prefix = f"study_{study_index}_round_{round_idx}_researcher"
+        _builder = researcher_builder or build_researcher
+        researchers = [
+            _builder(j, model, f"study_{study_index}_round_{round_idx}_researcher")
+            for j in range(len(questions))
+        ]
+
+        if len(researchers) == 1:
+            research_agent = researchers[0]
+        else:
+            research_agent = ParallelAgent(
+                name=f"parallel_s{study_index}_r{round_idx}",
+                sub_agents=researchers,
+            )
+
+        prompt = "Research the following questions:\n" + "\n".join(
+            f"{j+1}. {q}" for j, q in enumerate(questions)
+        )
+
+        for retry in range(ROUND_MAX_RETRIES + 1):
+            try:
+                runner = Runner(
+                    agent=research_agent,
+                    app_name=APP_NAME,
+                    session_service=session_service,
+                )
+                session = session_service.create_session(
+                    app_name=APP_NAME, user_id="system", state=dict(state)
+                )
+                content = types.Content(role="user", parts=[types.Part(text=prompt)])
+
+                async for event in runner.run_async(
+                    user_id="system", session_id=session.id, new_message=content
+                ):
+                    pass
+                break  # success
+            except Exception as e:
+                error_str = str(e).lower()
+                is_retryable = any(kw in error_str for kw in [
+                    "connect", "timeout", "read", "reset", "429", "503", "unavailable",
+                    "json serializable", "typeerror",  # ADK telemetry serialization
+                ])
+                if is_retryable and retry < ROUND_MAX_RETRIES:
+                    wait = ROUND_RETRY_BACKOFF * (retry + 1)
+                    logger.warning(
+                        "Study %d round %d research failed (attempt %d), retrying in %ds: %s",
+                        study_index, round_idx, retry + 1, wait, e,
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+
+        # Collect findings from session state
+        session = session_service.get_session(
+            app_name=APP_NAME, user_id="system", session_id=session.id
+        )
+        if session:
+            state.update(session.state)
+
+        if v2_on:
+            raw_round_findings: dict[str, str] = {}
+            for j in range(len(questions)):
+                key = f"study_{study_index}_round_{round_idx}_researcher_{j}"
+                raw = state.get(key, "")
+                if not raw:
+                    state[key] = "No research findings available for this question."
+                    raw_round_findings[key] = state[key]
+                    logger.warning("Researcher %s did not produce output", key)
+                    continue
+                raw_round_findings[key] = raw
+
+                if source_registry is not None:
+                    for url, title in _extract_sources(raw):
+                        score = score_url(url) or {}
+                        authority = float(score.get("authority_score", 0)) / 10.0
+                        source_registry.add(
+                            url,
+                            title=title,
+                            snippet="",
+                            authority=authority,
+                            study_index=study_index,
+                        )
+
+                compressed = compress_findings(raw, target_tokens=800, preserve_urls=True)
+                result.compressed_findings[key] = compressed
+                state[key] = compressed
+
+            # Under V2, round_findings preserves the RAW output for audit; state already holds compressed.
+            round_findings = raw_round_findings
+        else:
+            round_findings = {}
+            for j in range(len(questions)):
+                key = f"study_{study_index}_round_{round_idx}_researcher_{j}"
+                if key in state:
+                    round_findings[key] = state[key]
+                else:
+                    # Ensure key exists so gap analyzer template doesn't crash
+                    state[key] = "No research findings available for this question."
+                    logger.warning("Researcher %s did not produce output", key)
+                    round_findings[key] = state[key]
+        result.rounds.append(round_findings)
+
+        # Gap analysis (skip on last round)
+        if round_idx >= max_rounds - 1:
+            break
+
+        gap_text = ""
+        for retry in range(ROUND_MAX_RETRIES + 1):
+            try:
+                gap_agent = build_gap_analyzer(study_index, round_idx, len(questions), model=model)
+                gap_runner = Runner(
+                    agent=gap_agent,
+                    app_name=APP_NAME,
+                    session_service=session_service,
+                )
+                gap_session = session_service.create_session(
+                    app_name=APP_NAME, user_id="system", state=dict(state)
+                )
+                gap_prompt = f"Analyze research gaps for study: {title}"
+                gap_content = types.Content(role="user", parts=[types.Part(text=gap_prompt)])
+
+                async for event in gap_runner.run_async(
+                    user_id="system", session_id=gap_session.id, new_message=gap_content
+                ):
+                    if event.is_final_response() and event.content and event.content.parts:
+                        gap_text = event.content.parts[0].text
+                break
+            except Exception as e:
+                error_str = str(e).lower()
+                is_retryable = any(kw in error_str for kw in [
+                    "connect", "timeout", "read", "reset", "429", "503", "unavailable",
+                    "json serializable", "typeerror",  # ADK telemetry serialization
+                ])
+                if is_retryable and retry < ROUND_MAX_RETRIES:
+                    wait = ROUND_RETRY_BACKOFF * (retry + 1)
+                    logger.warning(
+                        "Study %d gap analysis round %d failed (attempt %d), retrying in %ds: %s",
+                        study_index, round_idx, retry + 1, wait, e,
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+
+        gap_session = session_service.get_session(
+            app_name=APP_NAME, user_id="system", session_id=gap_session.id
+        )
+        if gap_session:
+            state.update(gap_session.state)
+
+        # Parse gap analysis
+        gap_key = f"study_{study_index}_gaps_{round_idx}"
+        raw = state.get(gap_key, gap_text)
+        gap_data = parse_json_response(raw) if isinstance(raw, str) else raw
+
+        no_more_gaps = (
+            not isinstance(gap_data, dict)
+            or gap_data.get("escalate", True)
+        )
+        new_questions = gap_data.get("gaps", []) if isinstance(gap_data, dict) else []
+
+        if no_more_gaps or not new_questions:
+            # Under V2, if we're under the source_floor and rounds remain,
+            # force one more research round to fill the source gap.
+            if (
+                v2_on
+                and source_registry is not None
+                and round_idx < max_rounds - 1
+                and source_registry.count_for_study(study_index) < result.source_floor
+            ):
+                logger.info(
+                    "Study %d under source_floor (%d/%d), forcing another round",
+                    study_index,
+                    source_registry.count_for_study(study_index),
+                    result.source_floor,
+                )
+                from app.services.research_stats import increment as _inc
+                _inc("source_floor_warnings")
+                title_local = study.get("title", f"Study {study_index}")
+                questions = [f"Find additional authoritative sources for: {title_local}"]
+                continue
+            if no_more_gaps:
+                logger.info("Study %d — no more gaps after round %d", study_index, round_idx)
+            break
+
+        questions = new_questions[:3]
+        logger.info("Study %d — %d gap questions for next round: %s", study_index, len(questions), questions)
+
+    # Per-study synthesis
+    logger.info("Study %d — synthesizing findings from %d rounds", study_index, len(result.rounds))
+
+    # Count all researcher outputs for synthesis
+    all_research_keys = []
+    for round_findings in result.rounds:
+        all_research_keys.extend(round_findings.keys())
+
+    # Build a custom synthesizer for this study
+    synth_refs = "\n".join(f"- {{{key}}}" for key in all_research_keys)
+    from google.adk.agents import LlmAgent
+
+    synth_instruction = f"""You are a research synthesizer for the study: "{title}"
+Study angle: {angle}
+
+Synthesize ALL the following research findings into a comprehensive study document:
+{synth_refs}
+
+IMPORTANT RULES:
+- Only include findings that are backed by a specific, verifiable source URL. If a finding
+  says "source could not be verified" or lacks a concrete URL, EXCLUDE it from the synthesis.
+- Stay strictly within the geographic and topical scope of the original research query. Remove
+  any data, examples, or references from outside the relevant geography (e.g., do not include
+  German or UK broadcaster data in a study about the Netherlands).
+- Prefer fewer, well-sourced insights over a long list of unverified claims.
+
+SOURCE QUALITY RULES:
+- Prioritize claims backed by multiple independent sources. If 3+ sources agree, note this.
+- Weight authoritative domains higher: government (.gov), academic (.edu), major publications
+  (Reuters, Bloomberg, FT, WSJ) > general web sources > blogs/forums.
+- When a claim comes from a single source only, note: "(single source: [domain])".
+- Flag potential bias from vendor reports, sponsored content, or advocacy sources.
+- Tag each major finding with a confidence level:
+  [HIGH CONFIDENCE] — 3+ independent credible sources
+  [MEDIUM CONFIDENCE] — 1-2 credible sources
+  [LOW CONFIDENCE] — single source, potentially biased, or conflicting data
+
+Format your output as a professional study document with:
+# {title}
+
+## Overview
+(2-3 paragraph summary of this study's findings)
+
+## Detailed Findings
+(Organized by subtopic with bullet points and data. Each major finding tagged with confidence level.)
+
+## Source Reliability Notes
+- High confidence: [findings backed by 3+ sources]
+- Medium confidence: [findings from 1-2 credible sources]
+- Low confidence / needs verification: [single or biased sources]
+
+## Sources
+(All URLs referenced — only include URLs that back claims used above)
+
+## Key Takeaways
+(3-5 actionable insights from this study, noting confidence level for each)
+
+Write clearly, cite sources inline, be thorough."""
+
+    # Route per-study synthesis: OpenAI for deep reasoning, Gemini for fallback
+    synth_provider, synth_model_name = get_model_for_phase("study_synthesis")
+
+    if synth_provider == "openai":
+        # Resolve template variables for direct OpenAI API call
+        resolved_instruction = synth_instruction
+        for key in all_research_keys:
+            if key in state:
+                resolved_instruction = resolved_instruction.replace(f"{{{key}}}", state[key])
+
+        loop = asyncio.get_running_loop()
+        result.synthesis = await loop.run_in_executor(
+            get_io_executor(),
+            lambda ri=resolved_instruction: openai_svc.complete(
+                system_prompt=ri,
+                user_prompt=f"Synthesize all findings for study: {title}",
+                model=synth_model_name,
+                max_tokens=8000,
+                timeout=120,
+            ),
+        )
+
+    # Gemini fallback (or primary if provider is "gemini")
+    if not result.synthesis:
+        synth_agent = LlmAgent(
+            name=f"synthesizer_study_{study_index}",
+            model=model,
+            instruction=synth_instruction,
+            output_key=f"study_{study_index}_synthesis",
+        )
+
+        for retry in range(ROUND_MAX_RETRIES + 1):
+            try:
+                synth_runner = Runner(
+                    agent=synth_agent,
+                    app_name=APP_NAME,
+                    session_service=session_service,
+                )
+                synth_session = session_service.create_session(
+                    app_name=APP_NAME, user_id="system", state=dict(state)
+                )
+                synth_content = types.Content(
+                    role="user",
+                    parts=[types.Part(text=f"Synthesize all findings for study: {title}")],
+                )
+
+                async for event in synth_runner.run_async(
+                    user_id="system", session_id=synth_session.id, new_message=synth_content
+                ):
+                    if event.is_final_response() and event.content and event.content.parts:
+                        result.synthesis = event.content.parts[0].text
+                break
+            except Exception as e:
+                error_str = str(e).lower()
+                is_retryable = any(kw in error_str for kw in [
+                    "connect", "timeout", "read", "reset", "429", "503", "unavailable",
+                    "json serializable", "typeerror",  # ADK telemetry serialization
+                ])
+                if is_retryable and retry < ROUND_MAX_RETRIES:
+                    wait = ROUND_RETRY_BACKOFF * (retry + 1)
+                    logger.warning(
+                        "Study %d synthesis failed (attempt %d), retrying in %ds: %s",
+                        study_index, retry + 1, wait, e,
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    raise
+
+        if not result.synthesis:
+            synth_session = session_service.get_session(
+                app_name=APP_NAME, user_id="system", session_id=synth_session.id
+            )
+            if synth_session:
+                result.synthesis = synth_session.state.get(f"study_{study_index}_synthesis", "")
+                state.update(synth_session.state)
+
+    logger.info("Study %d '%s' complete — synthesis: %d chars", study_index, title, len(result.synthesis))
+    return result

@@ -1,0 +1,204 @@
+"""Wrapper for OpenAI API — deep analytical reasoning and gpt-5.5 completions."""
+
+import logging
+import os
+import time
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+BASE_URL = "https://api.openai.com/v1/chat/completions"
+
+# Retry config: 3 attempts with exponential backoff (2s, 4s)
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = [2, 4]
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+
+
+def _is_reasoning_model(model: str) -> bool:
+    """Reasoning models (o-series, gpt-5.x) use developer role + max_completion_tokens."""
+    return model.startswith(("o1", "o3", "o4", "gpt-5"))
+
+
+def _supports_reasoning_effort(model: str) -> bool:
+    """o3/o4-series and gpt-5.x accept the reasoning_effort parameter."""
+    return model.startswith(("o3", "o4", "gpt-5"))
+
+
+def _post_with_retry(headers: dict, body: dict, timeout: int) -> requests.Response:
+    """POST to OpenAI with retry + exponential backoff for transient errors."""
+    last_exc = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = requests.post(
+                BASE_URL, headers=headers, json=body, timeout=timeout,
+            )
+            if resp.status_code not in _RETRYABLE_STATUS:
+                return resp
+            # Retryable HTTP status
+            wait = _RETRY_BACKOFF[attempt] if attempt < len(_RETRY_BACKOFF) else _RETRY_BACKOFF[-1]
+            logger.warning(
+                "OpenAI %d on attempt %d/%d, retrying in %ds",
+                resp.status_code, attempt + 1, _MAX_RETRIES, wait,
+            )
+            time.sleep(wait)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+            last_exc = e
+            wait = _RETRY_BACKOFF[attempt] if attempt < len(_RETRY_BACKOFF) else _RETRY_BACKOFF[-1]
+            logger.warning(
+                "OpenAI connection error on attempt %d/%d: %s, retrying in %ds",
+                attempt + 1, _MAX_RETRIES, e, wait,
+            )
+            time.sleep(wait)
+    # Final attempt or re-raise
+    if last_exc:
+        raise last_exc
+    return resp  # Last response with retryable status — let caller handle
+
+
+def deep_reason(
+    question: str,
+    context: str,
+    api_key: str,
+    model: str = "gpt-5.5",
+) -> str:
+    """Use OpenAI for complex analytical reasoning.
+
+    Args:
+        question: The analytical question to reason about.
+        context: Research context/findings to reason over.
+        api_key: OpenAI API key.
+        model: Model to use (default gpt-5.5).
+
+    Returns analysis text, or empty string on failure.
+    """
+    if not api_key:
+        return ""
+
+    try:
+        is_reasoning = _is_reasoning_model(model)
+        messages = [
+            {
+                "role": "developer" if is_reasoning else "system",
+                "content": (
+                    "You are an expert analyst. Provide deep, structured analytical "
+                    "reasoning based on the provided research context. Focus on "
+                    "implications, causal relationships, second-order effects, and "
+                    "non-obvious insights. Be specific and evidence-based."
+                ),
+            },
+        ]
+
+        if context:
+            messages.append({
+                "role": "user",
+                "content": f"Research context:\n{context[:8000]}",
+            })
+
+        messages.append({
+            "role": "user",
+            "content": question,
+        })
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        body = {
+            "model": model,
+            "messages": messages,
+        }
+        if is_reasoning:
+            body["max_completion_tokens"] = 4000
+            if _supports_reasoning_effort(model):
+                body["reasoning_effort"] = "medium"
+        else:
+            body["max_tokens"] = 4000
+        resp = _post_with_retry(headers, body, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        if content:
+            logger.info("OpenAI reasoning returned %d chars for: %s", len(content), question[:80])
+        else:
+            logger.warning("OpenAI returned empty response for: %s", question[:80])
+        return content
+
+    except Exception as e:
+        logger.warning("OpenAI reasoning failed for '%s': %s", question[:80], e)
+        return ""
+
+
+def complete(
+    system_prompt: str,
+    user_prompt: str,
+    model: str = "",
+    max_tokens: int = 8000,
+    timeout: int = 120,
+) -> str:
+    """Generic OpenAI completion for synthesis/analysis tasks.
+
+    Supports gpt-5.x and o-series reasoning models with automatic parameter adjustment.
+    Falls back gracefully — returns empty string on failure.
+
+    Args:
+        system_prompt: System instruction.
+        user_prompt: User message (can be long — study findings, synthesis text).
+        model: Model override. Defaults to OPENAI_REASONING_MODEL env var or gpt-5.5.
+        max_tokens: Max output tokens.
+        timeout: Request timeout in seconds.
+
+    Returns:
+        Model response text, or empty string on failure.
+    """
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        return ""
+
+    if not model:
+        model = os.getenv("OPENAI_REASONING_MODEL", "gpt-5.5")
+
+    try:
+        # Reasoning models use different parameters (developer role, max_completion_tokens)
+        is_reasoning = _is_reasoning_model(model)
+
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system" if not is_reasoning else "developer", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+
+        if is_reasoning:
+            # Reasoning models use max_completion_tokens, not max_tokens
+            body["max_completion_tokens"] = max_tokens
+            if _supports_reasoning_effort(model):
+                body["reasoning_effort"] = "medium"
+        else:
+            body["max_tokens"] = max_tokens
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+        resp = _post_with_retry(headers, body, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+
+        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        usage = data.get("usage", {})
+        logger.info(
+            "OpenAI %s complete: %d chars (tokens: %d in, %d out)",
+            model,
+            len(content),
+            usage.get("prompt_tokens", 0),
+            usage.get("completion_tokens", 0),
+        )
+        return content
+
+    except Exception as e:
+        logger.warning("OpenAI complete failed (model=%s): %s", model, e)
+        return ""

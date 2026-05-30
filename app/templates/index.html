@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Luminary</title>
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/static/icon.svg">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#0dccf2">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Luminary">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@200;300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        "primary": "#0dccf2",
+        "primary-glow": "rgba(13,204,242,0.4)",
+        "bg": "#f5f8f8",
+        "chrome": "#e2e8e8",
+      },
+      fontFamily: { display: ["Inter","sans-serif"] },
+      borderRadius: { DEFAULT:"1rem", lg:"2rem", xl:"3rem", full:"9999px" },
+      boxShadow: {
+        glass: "0 8px 32px 0 rgba(31,38,135,0.07)",
+        glow: "0 0 20px rgba(13,204,242,0.5), 0 0 60px rgba(13,204,242,0.2)",
+        "inner-chrome": "inset 0 2px 4px 0 rgba(255,255,255,0.9), inset 0 -2px 4px 0 rgba(0,0,0,0.1)",
+        neumorphic: "20px 20px 60px #d1d9d9, -20px -20px 60px #ffffff",
+      },
+      backgroundImage: {
+        "chrome-gradient": "linear-gradient(135deg, #ffffff 0%, #f0f4f4 50%, #dce3e3 100%)",
+      },
+    },
+  },
+}
+</script>
+<link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body class="font-display text-slate-600 flex flex-col items-center overflow-x-hidden">
+
+<!-- Background blurs -->
+<div class="fixed inset-0 pointer-events-none overflow-hidden">
+  <div class="absolute top-[-20%] left-[-10%] w-[500px] h-[500px] bg-primary/5 rounded-full blur-[100px]"></div>
+  <div class="absolute bottom-[-10%] right-[-10%] w-[400px] h-[400px] bg-primary/10 rounded-full blur-[80px]"></div>
+  <div class="absolute inset-0 opacity-[0.03]" style="background-image:radial-gradient(#0dccf2 1px,transparent 1px);background-size:40px 40px"></div>
+</div>
+
+<main class="relative z-10 w-full max-w-md lg:max-w-lg min-h-screen flex flex-col px-6 sm:px-8 pb-28">
+
+  <!-- ════════════ HOME VIEW ════════════ -->
+  <div id="view-home" class="view active flex-1">
+    <!-- Header -->
+    <header class="flex flex-col items-center mt-6 space-y-2 opacity-80">
+      <div class="flex items-center space-x-2 text-[10px] tracking-[0.2em] font-medium uppercase text-slate-400">
+        <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+        <span>System Online</span>
+      </div>
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+      <div class="flex items-center space-x-12 mt-4">
+        <div class="flex flex-col items-center">
+          <span class="text-[10px] text-slate-400 uppercase tracking-wider mb-1">Researching</span>
+          <div class="flex items-center space-x-1">
+            <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+            <span id="stat-researching" class="text-lg font-medium text-slate-700">00</span>
+          </div>
+        </div>
+        <div class="w-px h-8 bg-gradient-to-b from-transparent via-slate-200 to-transparent"></div>
+        <div class="flex flex-col items-center">
+          <span class="text-[10px] text-slate-400 uppercase tracking-wider mb-1">Completed</span>
+          <div class="flex items-center space-x-1">
+            <span class="material-icons text-[10px] text-primary">check_circle</span>
+            <span id="stat-completed" class="text-lg font-medium text-slate-700">0</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Mode toggle: Talk (in-car) vs Research (desk) -->
+    <div class="flex gap-1 mt-4 p-1 rounded-full bg-slate-100/70 w-full max-w-[260px] mx-auto" role="tablist" aria-label="Home mode">
+      <button id="home-mode-talk" onclick="App.setHomeMode('talk')" role="tab"
+              class="flex-1 py-2 rounded-full text-xs font-semibold bg-primary text-white transition-all">Talk</button>
+      <button id="home-mode-research" onclick="App.setHomeMode('research')" role="tab"
+              class="flex-1 py-2 rounded-full text-xs font-semibold text-slate-500 transition-all">Research</button>
+    </div>
+
+    <!-- Active research banners (one per running job) -->
+    <div id="active-jobs-banners" class="space-y-2 mt-4"></div>
+
+    <!-- In-car meeting prep: active prep + one-tap agent calls -->
+    <div id="home-prep" class="w-full mt-4 hidden">
+      <div class="glass-panel rounded-2xl px-5 py-4 border border-white/60 shadow-glass">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-[11px] uppercase tracking-widest text-primary/70 font-semibold">Meeting Prep</span>
+          <span id="home-prep-depth" class="text-[10px] uppercase tracking-wider text-slate-500"></span>
+        </div>
+        <div id="home-prep-title" class="text-base font-semibold text-slate-800 leading-snug mb-1 line-clamp-2">—</div>
+        <div class="text-[11px] text-slate-500 mb-3">Tap an agent, then pick the research to discuss.</div>
+        <div id="home-prep-agents" class="grid grid-cols-2 gap-3"></div>
+        <button id="enable-mic-btn" onclick="App.enableMic()"
+                class="hidden w-full mt-3 flex items-center justify-center gap-2 py-2.5 rounded-xl border border-primary/40 text-primary text-sm font-medium active:scale-[0.98] transition-transform">
+          <span class="material-icons text-base">mic</span> Enable microphone for calls
+        </button>
+      </div>
+    </div>
+
+    <!-- Input + Button (research creation — hidden in Talk mode) -->
+    <div id="home-research-section" class="flex-1 flex flex-col items-center justify-center w-full space-y-10 -mt-4">
+      <!-- Glass input panel -->
+      <div class="w-full relative group transform transition-all duration-300 hover:scale-[1.01]">
+        <div class="absolute -inset-1 bg-gradient-to-r from-primary/20 to-slate-200/30 rounded-[2rem] blur-md opacity-50 group-hover:opacity-100 transition duration-500"></div>
+        <div class="glass-panel relative rounded-[2rem] flex flex-col items-start px-7 py-5 shadow-glass border border-white/60">
+          <div class="flex items-center w-full mb-2">
+            <span class="material-icons text-primary/80 mr-3 text-xl">science</span>
+            <span class="text-[10px] uppercase tracking-widest text-primary/60 font-semibold">Research Query</span>
+          </div>
+          <input id="query-input" type="text" class="bg-transparent border-none w-full text-slate-800 placeholder-slate-400 focus:ring-0 text-lg tracking-wide font-light p-0 h-10" placeholder="Awaiting Command...">
+          <div class="w-full h-0.5 bg-slate-100 mt-3 relative overflow-hidden rounded-full">
+            <div class="absolute top-0 left-0 h-full w-1/3 bg-primary/50" style="animation:shimmer 2s infinite"></div>
+          </div>
+          <!-- Depth pills -->
+          <div id="depth-selector" class="flex gap-2 mt-4 w-full">
+            <button class="depth-btn flex-1 py-2 rounded-xl text-xs font-medium tracking-wide border border-slate-200 text-slate-400 transition-all hover:border-primary/30" data-depth="QUICK">Quick</button>
+            <button class="depth-btn flex-1 py-2 rounded-xl text-xs font-medium tracking-wide border border-primary text-primary bg-primary/10 transition-all" data-depth="STANDARD">Standard</button>
+            <button class="depth-btn flex-1 py-2 rounded-xl text-xs font-medium tracking-wide border border-slate-200 text-slate-400 transition-all hover:border-primary/30" data-depth="DEEP">Deep</button>
+          </div>
+          <!-- Business Context (optional, collapsible) -->
+          <div id="business-context-section" class="hidden mt-3 w-full">
+            <button id="bc-toggle" type="button" class="flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-400 hover:text-primary transition-colors">
+              <span class="material-icons text-sm">tune</span>
+              <span id="bc-toggle-label">Business Context (optional)</span>
+            </button>
+            <div id="bc-fields" class="hidden mt-2 space-y-2">
+              <select id="bc-role" class="w-full text-xs rounded-lg border border-slate-200 bg-white/50 px-3 py-1.5 text-slate-600 focus:border-primary focus:ring-1 focus:ring-primary/30">
+                <option value="">Role (optional)</option>
+                <option value="Product Manager">Product Manager</option>
+                <option value="Executive">Executive</option>
+                <option value="Analyst">Analyst</option>
+                <option value="Investor">Investor</option>
+                <option value="Researcher">Researcher</option>
+                <option value="Consultant">Consultant</option>
+                <option value="Other">Other</option>
+              </select>
+              <select id="bc-decision" class="w-full text-xs rounded-lg border border-slate-200 bg-white/50 px-3 py-1.5 text-slate-600 focus:border-primary focus:ring-1 focus:ring-primary/30">
+                <option value="">Decision Type (optional)</option>
+                <option value="Build vs Buy">Build vs Buy</option>
+                <option value="Market Entry">Market Entry</option>
+                <option value="Investment">Investment</option>
+                <option value="Strategy">Strategy</option>
+                <option value="General">General</option>
+              </select>
+              <input id="bc-industry" type="text" placeholder="Industry (optional)" class="w-full text-xs rounded-lg border border-slate-200 bg-white/50 px-3 py-1.5 text-slate-600 placeholder-slate-300 focus:border-primary focus:ring-1 focus:ring-primary/30">
+              <input id="bc-stakeholders" type="text" placeholder="Key stakeholders, comma-separated (optional)" class="w-full text-xs rounded-lg border border-slate-200 bg-white/50 px-3 py-1.5 text-slate-600 placeholder-slate-300 focus:border-primary focus:ring-1 focus:ring-primary/30">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Neumorphic ACTIVATE button -->
+      <div class="relative flex items-center justify-center">
+        <div class="w-56 h-56 rounded-full bg-chrome-gradient shadow-neumorphic flex items-center justify-center relative">
+          <div class="absolute inset-0 rounded-full border border-slate-200/50"></div>
+          <div class="absolute inset-2 rounded-full border border-slate-100"></div>
+          <button id="activate-btn" class="w-40 h-40 rounded-full bg-white shadow-inner-chrome flex items-center justify-center relative group active:scale-95 transition-transform duration-200 overflow-hidden">
+            <div class="absolute inset-0 bg-gradient-to-tr from-slate-50 to-slate-100 z-0"></div>
+            <div class="absolute w-full h-full opacity-0 group-hover:opacity-100 transition-opacity duration-700 bg-primary/5 blur-xl"></div>
+            <div class="relative z-10 flex flex-col items-center justify-center">
+              <div class="w-20 h-20 rounded-full bg-gradient-to-br from-primary to-cyan-300 shadow-glow flex items-center justify-center mb-2 group-hover:scale-105 transition-transform duration-300">
+                <span class="material-icons text-white text-4xl drop-shadow-md">fingerprint</span>
+              </div>
+              <span class="text-[10px] font-semibold tracking-[0.25em] text-slate-400 group-hover:text-primary transition-colors duration-300 mt-2">ACTIVATE</span>
+            </div>
+            <div class="absolute top-0 left-0 w-full h-1/2 bg-gradient-to-b from-white/40 to-transparent pointer-events-none rounded-t-full"></div>
+          </button>
+          <div class="absolute inset-0 pointer-events-none" style="animation:spin 8s linear infinite">
+            <div class="absolute top-5 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-primary/60 blur-[1px]"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Agent KB status bar -->
+      <div class="flex justify-between w-full px-6 text-[10px] text-slate-400 font-mono opacity-60">
+        <span>MAYA: <span id="kb-maya" class="text-primary/80">--</span></span>
+        <span>BARN: <span id="kb-barnaby" class="text-amber-400/80">--</span></span>
+        <span>CONS: <span id="kb-consultant" class="text-violet-400/80">--</span></span>
+        <span>RUTG: <span id="kb-rutger" class="text-emerald-400/80">--</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════ VALIDATION VIEW (DEEP only) ════════════ -->
+  <div id="view-validate" class="view flex-1">
+    <header class="flex flex-col items-center mt-6 space-y-1 opacity-80">
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+      <p class="text-xs text-primary">Query Review</p>
+    </header>
+    <div class="flex-1 flex flex-col items-center justify-center gap-5 px-2">
+      <div class="w-16 h-16 rounded-full bg-amber-50 flex items-center justify-center">
+        <span class="material-icons text-amber-400 text-3xl">rate_review</span>
+      </div>
+      <div class="text-base font-semibold text-slate-700 text-center">Let's sharpen this query</div>
+      <div id="validate-feedback" class="text-sm text-slate-500 text-center leading-relaxed px-2"></div>
+      <div id="validate-suggested" class="glass-panel rounded-xl p-4 w-full shadow-glass border border-white/60 hidden">
+        <div class="text-[10px] uppercase tracking-widest text-primary/60 font-semibold mb-2">Suggested query</div>
+        <div id="validate-suggested-text" class="text-sm text-slate-700 font-medium"></div>
+      </div>
+      <button id="validate-use-suggested" onclick="App.useSuggested()"
+              class="w-full py-3 rounded-xl bg-primary text-white text-center font-semibold text-sm hidden">
+        Use Suggested Query
+      </button>
+      <button onclick="App.forceStart()"
+              class="w-full py-3 rounded-xl border border-slate-200 text-slate-500 text-center font-medium text-sm hover:bg-slate-50">
+        Start Anyway With Original
+      </button>
+      <button onclick="App.showView('home')"
+              class="text-xs text-slate-400 hover:text-primary transition-colors">
+        Back to edit
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════════ PLAN REVIEW VIEW ════════════ -->
+  <div id="view-plan" class="view flex-1" style="overflow-y:auto">
+    <header class="flex flex-col items-center mt-6 space-y-1 opacity-80">
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+      <p class="text-xs text-primary">Research Plan</p>
+    </header>
+    <div class="flex-1 flex flex-col gap-4 px-3 pb-6 mt-4">
+      <!-- Interpreted query -->
+      <div class="glass-panel rounded-xl p-4 shadow-glass border border-white/60">
+        <div class="text-[10px] uppercase tracking-widest text-primary/60 font-semibold mb-2">Interpreted Query</div>
+        <textarea id="plan-query" rows="2" class="w-full text-sm text-slate-700 bg-transparent border border-slate-200 rounded-lg px-3 py-2 focus:border-primary focus:ring-1 focus:ring-primary/30 resize-none"></textarea>
+      </div>
+
+      <!-- Depth selector -->
+      <div class="glass-panel rounded-xl p-4 shadow-glass border border-white/60">
+        <div class="text-[10px] uppercase tracking-widest text-primary/60 font-semibold mb-2">Depth</div>
+        <div class="flex gap-2">
+          <button class="plan-depth-btn flex-1 py-2 rounded-xl text-xs font-medium tracking-wide border transition-all" data-depth="QUICK">Quick</button>
+          <button class="plan-depth-btn flex-1 py-2 rounded-xl text-xs font-medium tracking-wide border transition-all" data-depth="STANDARD">Standard</button>
+          <button class="plan-depth-btn flex-1 py-2 rounded-xl text-xs font-medium tracking-wide border transition-all" data-depth="DEEP">Deep</button>
+        </div>
+        <div id="plan-depth-reason" class="text-xs text-slate-400 mt-2"></div>
+        <div id="plan-estimate" class="text-xs text-slate-500 mt-1 font-medium"></div>
+      </div>
+
+      <!-- Clarifying questions -->
+      <div id="plan-clarifying-section" class="glass-panel rounded-xl p-4 shadow-glass border border-amber-200/60 bg-amber-50/30 hidden">
+        <div class="text-[10px] uppercase tracking-widest text-amber-500/80 font-semibold mb-2 flex items-center gap-1">
+          <span class="material-icons text-sm">help_outline</span>
+          Clarifying Questions
+        </div>
+        <div id="plan-clarifying-list" class="space-y-3"></div>
+      </div>
+
+      <!-- Proposed studies -->
+      <div class="glass-panel rounded-xl p-4 shadow-glass border border-white/60">
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-[10px] uppercase tracking-widest text-primary/60 font-semibold">Proposed Studies</div>
+          <span id="plan-study-count" class="text-xs text-slate-400"></span>
+        </div>
+        <div id="plan-studies-list" class="space-y-2"></div>
+        <button id="plan-add-study-btn" onclick="App.addPlanStudy()" class="mt-3 w-full py-2 rounded-lg border border-dashed border-primary/30 text-primary/60 text-xs font-medium hover:border-primary hover:text-primary hover:bg-primary/5 transition-all flex items-center justify-center gap-1">
+          <span class="material-icons text-sm">add</span> Add Study
+        </button>
+      </div>
+
+      <!-- Domains -->
+      <div id="plan-domains-section" class="glass-panel rounded-xl p-4 shadow-glass border border-white/60">
+        <div class="text-[10px] uppercase tracking-widest text-primary/60 font-semibold mb-2">Domains & Complexity</div>
+        <div id="plan-domains" class="flex flex-wrap gap-1"></div>
+      </div>
+
+      <!-- Action buttons -->
+      <div class="space-y-2 mt-2">
+        <button id="plan-execute-btn" onclick="App.executePlan()"
+                class="w-full py-3 rounded-xl bg-primary text-white text-center font-semibold text-sm active:scale-95 transition-transform">
+          <span class="material-icons text-sm align-middle mr-1">play_arrow</span>
+          Start Research
+        </button>
+        <button onclick="App.showView('home')"
+                class="w-full py-3 rounded-xl border border-slate-200 text-slate-500 text-center font-medium text-sm hover:bg-slate-50">
+          Back to Edit
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════ PROGRESS VIEW ════════════ -->
+  <div id="view-progress" class="view flex-1" style="overflow-y:auto">
+    <header class="flex flex-col items-center mt-4 space-y-1 opacity-80">
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+      <p class="text-xs text-primary">Researching...</p>
+    </header>
+    <div class="flex flex-col items-center gap-4 px-2 pb-4">
+      <!-- Compact spinner + phase -->
+      <div class="flex items-center gap-3 mt-3">
+        <div class="relative w-10 h-10 flex-shrink-0">
+          <div class="absolute inset-0 border-2 border-slate-200 border-t-primary rounded-full" style="animation:spin 1.2s linear infinite"></div>
+          <div class="absolute inset-1.5 border-2 border-slate-200 border-t-primary/50 rounded-full" style="animation:spin 1.8s linear infinite reverse"></div>
+          <div class="absolute inset-0 flex items-center justify-center">
+            <span class="material-icons text-primary text-sm">search</span>
+          </div>
+        </div>
+        <div id="phase-text" class="text-sm text-slate-600 font-medium">Starting...</div>
+      </div>
+
+      <!-- Countdown + elapsed -->
+      <div class="flex items-center gap-6 text-center">
+        <div>
+          <div class="text-[10px] uppercase tracking-wider text-slate-400 mb-0.5">Elapsed</div>
+          <div id="elapsed" class="text-base font-mono font-medium text-slate-600 tabular-nums">0:00</div>
+        </div>
+        <div class="w-px h-6 bg-gradient-to-b from-transparent via-slate-200 to-transparent"></div>
+        <div>
+          <div class="text-[10px] uppercase tracking-wider text-slate-400 mb-0.5">Est. Remaining</div>
+          <div id="countdown" class="text-base font-mono font-medium text-primary tabular-nums">--:--</div>
+        </div>
+      </div>
+
+      <!-- Progress bar -->
+      <div class="w-full px-2">
+        <div class="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+          <div id="progress-bar" class="h-full bg-gradient-to-r from-primary to-cyan-300 rounded-full transition-all duration-1000" style="width:0%"></div>
+        </div>
+        <div class="flex justify-between mt-0.5">
+          <span id="progress-start" class="text-[10px] text-slate-400 font-mono">--:--</span>
+          <span id="progress-pct" class="text-[10px] text-primary font-semibold">0%</span>
+          <span id="progress-eta" class="text-[10px] text-slate-400 font-mono">--:--</span>
+        </div>
+      </div>
+
+      <!-- Cancel button -->
+      <div id="cancel-research-section" class="w-full px-2">
+        <button id="cancel-research-btn" onclick="App.cancelResearch()"
+                class="w-full py-2 rounded-xl border border-red-200 text-red-400 text-center font-medium text-xs hover:bg-red-50 transition-colors">
+          <span class="material-icons text-sm align-middle mr-1">stop</span>
+          Cancel Research
+        </button>
+      </div>
+
+      <!-- Research Intelligence Dashboard -->
+      <div id="research-stats" class="w-full hidden">
+        <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold px-1 mb-2">Research Intelligence</div>
+        <div class="stats-grid mb-3">
+          <div class="stat-card">
+            <div class="stat-value text-primary" id="stat-searches">0</div>
+            <div class="stat-label">Searches</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value text-primary" id="stat-pages">0</div>
+            <div class="stat-label">Pages Read</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value text-amber-500" id="stat-news">0</div>
+            <div class="stat-label">News</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value text-violet-500" id="stat-ai">0</div>
+            <div class="stat-label">AI Analyses</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value text-emerald-500" id="stat-sources">0</div>
+            <div class="stat-label">URLs Fetched</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value text-rose-500" id="stat-grok">0</div>
+            <div class="stat-label">Social Intel</div>
+          </div>
+        </div>
+        <!-- Human Hours Hero -->
+        <div class="human-hours-hero mb-3">
+          <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold mb-1">Equivalent Human Effort</div>
+          <div class="flex items-baseline justify-center gap-1">
+            <span id="stat-human-hours" class="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-primary to-violet-500">0</span>
+            <span class="text-sm text-slate-400 font-medium">hours</span>
+          </div>
+          <div id="stat-hours-breakdown" class="text-[10px] text-slate-400 mt-1"></div>
+        </div>
+      </div>
+
+      <!-- Parallel Research Cluster (visible when multiple studies run) -->
+      <div id="parallel-cluster" class="w-full hidden">
+        <div class="glass-panel rounded-xl p-3 shadow-glass border border-primary/10">
+          <div class="flex items-center gap-2 mb-2">
+            <span class="material-icons text-primary text-sm">device_hub</span>
+            <span class="text-[10px] uppercase tracking-wider text-primary font-semibold">Parallel Research Cluster</span>
+            <span id="cluster-count" class="text-[10px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-bold"></span>
+          </div>
+          <div id="cluster-nodes" class="flex flex-wrap gap-1.5"></div>
+        </div>
+      </div>
+
+      <!-- Study plan tracker (DEEP only, populated by poll()) -->
+      <div id="study-tracker" class="w-full space-y-1.5 hidden">
+        <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold px-1">Research Plan</div>
+        <div id="study-list" class="space-y-1"></div>
+      </div>
+
+      <!-- Pipeline steps tracker -->
+      <div id="pipeline-steps" class="w-full hidden">
+        <div class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold px-1 mb-1">Pipeline</div>
+        <div id="step-list" class="space-y-1"></div>
+      </div>
+
+      <!-- Mid-research status card -->
+      <div id="mid-check" class="glass-panel rounded-xl p-2.5 w-full shadow-glass border border-white/60">
+        <div class="flex items-center gap-2">
+          <span id="mid-check-icon" class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+          <span id="mid-check-text" class="text-[11px] text-slate-500">Pipeline running normally</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════ RESULT VIEW ════════════ -->
+  <div id="view-result" class="view flex-1">
+    <header class="flex flex-col items-center mt-6 space-y-1 opacity-80">
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+    </header>
+    <div class="flex-1 flex flex-col items-center justify-center gap-4 px-2">
+      <span class="material-icons text-6xl text-emerald-400">check_circle</span>
+      <div class="text-lg font-semibold text-slate-700">Research Complete</div>
+      <div id="result-query" class="text-sm text-slate-400 text-center"></div>
+      <div class="w-full flex gap-2">
+        <a id="result-link" href="#" target="_blank" rel="noopener"
+           class="flex-1 py-3 rounded-xl bg-primary text-white text-center font-semibold text-sm tracking-wide hover:opacity-85 transition-opacity block">
+          View Full Report
+        </a>
+        <button id="copy-url-btn" onclick="App.copyReportUrl()"
+                class="px-4 py-3 rounded-xl border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-primary transition-colors flex items-center gap-1.5"
+                title="Copy report URL (e.g. for NotebookLM)">
+          <span class="material-icons text-lg">content_copy</span>
+        </button>
+      </div>
+
+      <!-- NotebookLM Sources (collapsible) -->
+      <div id="notebooklm-section" class="w-full hidden">
+        <button onclick="document.getElementById('notebooklm-list').classList.toggle('hidden');this.querySelector('.expand-icon').textContent=document.getElementById('notebooklm-list').classList.contains('hidden')?'expand_more':'expand_less'"
+                class="flex items-center gap-1.5 mx-auto text-[11px] text-slate-500 hover:text-primary transition-colors font-medium">
+          <span class="material-icons text-sm">auto_stories</span>
+          <span>NotebookLM Sources</span>
+          <span class="material-icons text-sm expand-icon">expand_more</span>
+        </button>
+        <div id="notebooklm-list" class="hidden mt-2 space-y-1"></div>
+      </div>
+
+      <!-- Agent chat cards (primary action) -->
+      <div class="w-full mt-4 space-y-2">
+        <p class="text-[10px] uppercase tracking-widest text-slate-400 text-center mb-2">Chat about this research</p>
+        <div id="result-agents" class="space-y-2"></div>
+      </div>
+
+      <!-- Reassign panel (hidden behind more_horiz) -->
+      <div class="w-full mt-2">
+        <button onclick="App.toggleReassign()"
+                class="flex items-center gap-1 mx-auto text-[11px] text-slate-400 hover:text-primary transition-colors">
+          <span class="material-icons text-sm">more_horiz</span>
+          <span id="reassign-toggle-label">Reassign to specific agent</span>
+        </button>
+        <div id="reassign-panel" class="hidden mt-2 space-y-2">
+          <div id="reassign-agents" class="space-y-2"></div>
+          <div id="reassign-countdown" class="hidden text-center py-2">
+            <div class="text-[11px] text-slate-400">RAG indexing in progress</div>
+            <div id="reassign-timer" class="text-sm font-mono text-primary font-semibold">5:00</div>
+            <div class="text-[10px] text-slate-400 mt-1">Chat will be available after indexing completes</div>
+          </div>
+        </div>
+      </div>
+
+      <button onclick="App.showView('home')"
+              class="w-full py-3 rounded-xl border border-slate-200 text-slate-500 text-center font-medium text-sm hover:bg-slate-50 transition-colors mt-2">
+        New Research
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════════ ERROR VIEW ════════════ -->
+  <div id="view-error" class="view flex-1">
+    <header class="flex flex-col items-center mt-6 space-y-1 opacity-80">
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+    </header>
+    <div class="flex-1 flex flex-col items-center justify-center gap-4">
+      <span class="material-icons text-6xl text-red-400">error</span>
+      <div class="text-lg font-semibold text-slate-700">Research Failed</div>
+      <div id="error-msg" class="text-sm text-slate-400 text-center px-4"></div>
+      <button id="resume-btn" onclick="App.resumeResearch()" class="w-full py-3 rounded-xl bg-emerald-500 text-white text-center font-semibold text-sm hidden">Resume from Checkpoint</button>
+      <button onclick="App.retry()" class="w-full py-3 rounded-xl bg-primary text-white text-center font-semibold text-sm">Retry</button>
+      <button onclick="App.showView('home')" class="w-full py-3 rounded-xl border border-slate-200 text-slate-500 text-center font-medium text-sm">New Research</button>
+    </div>
+  </div>
+
+  <!-- ════════════ CHAT VIEW ════════════ -->
+  <div id="view-chat" class="view flex-1">
+    <header class="flex flex-col items-center mt-6 space-y-1 opacity-80">
+      <div class="flex items-center space-x-2 text-[10px] tracking-[0.2em] font-medium uppercase text-slate-400">
+        <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+        <span>Agents Online</span>
+      </div>
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Research Agents</h1>
+    </header>
+    <div id="chat-agents" class="mt-6 space-y-3"></div>
+  </div>
+
+  <!-- ════════════ GRAPH VIEW ════════════ -->
+  <div id="view-graph" class="view flex-1" style="overflow-y:auto">
+    <header class="flex flex-col items-center mt-6 space-y-1 opacity-80">
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+      <p class="text-xs text-primary">Knowledge Graph</p>
+    </header>
+    <div id="graph-content" class="mt-4 px-2 pb-4">
+      <div id="graph-stats" class="glass-panel rounded-xl p-4 shadow-glass border border-white/60 mb-3">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="material-icons text-primary text-lg">hub</span>
+          <span class="text-sm font-semibold text-slate-700">Graph Overview</span>
+        </div>
+        <div class="flex gap-4 text-center">
+          <div><span id="graph-entities-count" class="text-lg font-bold text-primary">0</span><div class="text-[10px] text-slate-400">Entities</div></div>
+          <div><span id="graph-rels-count" class="text-lg font-bold text-amber-500">0</span><div class="text-[10px] text-slate-400">Relations</div></div>
+        </div>
+      </div>
+      <div class="mb-2">
+        <input id="graph-search" type="text" placeholder="Search entities..."
+               class="w-full px-3 py-2 rounded-lg bg-white/60 border border-slate-200 text-sm text-slate-700 placeholder-slate-400 focus:ring-1 focus:ring-primary"
+               oninput="App.filterGraph(this.value)">
+      </div>
+      <div id="graph-entities-list" class="space-y-1.5"></div>
+    </div>
+  </div>
+
+  <!-- ════════════ AMEND VIEW ════════════ -->
+  <div id="view-amend" class="view flex-1">
+    <header class="flex flex-col items-center mt-6 space-y-1 opacity-80">
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+      <p class="text-xs text-amber-500">Amend Research</p>
+    </header>
+    <div class="flex-1 flex flex-col gap-4 px-2 mt-4">
+      <div class="glass-panel rounded-xl p-4 shadow-glass border border-white/60">
+        <div class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold mb-1">Original Query</div>
+        <div id="amend-original-query" class="text-sm text-slate-700 font-medium"></div>
+      </div>
+      <div>
+        <label class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold block mb-1">Additional Questions</label>
+        <textarea id="amend-questions" rows="4"
+                  class="w-full px-4 py-3 rounded-xl bg-white/60 border border-slate-200 text-sm text-slate-700 placeholder-slate-400 focus:ring-1 focus:ring-primary focus:border-primary"
+                  placeholder="One question per line..."></textarea>
+      </div>
+      <div>
+        <label class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold block mb-1">New Perspective (optional)</label>
+        <textarea id="amend-perspective" rows="2"
+                  class="w-full px-4 py-3 rounded-xl bg-white/60 border border-slate-200 text-sm text-slate-700 placeholder-slate-400 focus:ring-1 focus:ring-primary focus:border-primary"
+                  placeholder="e.g., Focus on environmental impact..."></textarea>
+      </div>
+      <button id="amend-submit-btn" onclick="App.submitAmendment()"
+              class="w-full py-3 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 text-white text-center font-semibold text-sm hover:opacity-90 transition-opacity">
+        Run Amendment
+      </button>
+      <button onclick="App.showView('archive')"
+              class="w-full py-3 rounded-xl border border-slate-200 text-slate-500 text-center font-medium text-sm hover:bg-slate-50 transition-colors">
+        Back to Archive
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════════ PODCAST VIEW ════════════ -->
+  <div id="view-podcast" class="view flex-1" style="overflow-y:auto">
+    <header class="flex flex-col items-center mt-6 space-y-1 opacity-80">
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+      <p class="text-xs text-violet-500">Generate Podcast</p>
+    </header>
+    <div class="flex-1 flex flex-col gap-4 px-2 mt-4 pb-24">
+      <div class="glass-panel rounded-xl p-4 shadow-glass border border-white/60">
+        <div class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold mb-1">Research Topic</div>
+        <div id="podcast-query" class="text-sm text-slate-700 font-medium"></div>
+      </div>
+
+      <!-- Loading state -->
+      <div id="podcast-loading" class="flex flex-col items-center justify-center py-8">
+        <div class="w-6 h-6 border-2 border-slate-200 border-t-violet-500 rounded-full" style="animation:spin 0.8s linear infinite"></div>
+        <p class="text-xs text-slate-400 mt-2">Analyzing research for podcast...</p>
+      </div>
+
+      <!-- Podcast options (hidden until analysis complete) -->
+      <div id="podcast-styles" class="hidden space-y-4">
+        <!-- Angles section -->
+        <div id="podcast-angles-section" class="hidden">
+          <div class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold mb-2">Focus Angles <span class="normal-case tracking-normal font-normal">(optional)</span></div>
+          <div id="podcast-angle-cards" class="space-y-1.5"></div>
+        </div>
+
+        <!-- Style selection -->
+        <div>
+          <div class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold mb-2">Choose a style</div>
+          <div id="podcast-style-cards" class="space-y-2"></div>
+        </div>
+
+        <!-- Scenario suggestions (shown after style selection) -->
+        <div id="podcast-suggestions-section" class="hidden">
+          <div class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold mb-2">Episode Concept <span class="normal-case tracking-normal font-normal">(optional)</span></div>
+          <div id="podcast-suggestion-cards" class="space-y-1.5"></div>
+        </div>
+
+        <!-- Host selection -->
+        <div id="podcast-hosts-section" class="hidden">
+          <div class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold mb-2">Choose Hosts</div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-[10px] text-slate-400 mb-1 block">Host (Speaker 1)</label>
+              <select id="podcast-host-select" class="w-full rounded-lg border border-slate-200 bg-white/80 text-sm text-slate-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-300"></select>
+            </div>
+            <div>
+              <label class="text-[10px] text-slate-400 mb-1 block">Guest (Speaker 2)</label>
+              <select id="podcast-guest-select" class="w-full rounded-lg border border-slate-200 bg-white/80 text-sm text-slate-700 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-violet-300"></select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Language & Duration -->
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <div class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold mb-2">Language</div>
+            <div class="flex gap-2">
+              <label class="podcast-lang-card flex-1 cursor-pointer glass-panel rounded-lg px-3 py-2 shadow-glass border-2 border-violet-400 bg-violet-50/40 text-center transition-all">
+                <input type="radio" name="podcast-lang" value="en" class="hidden" checked>
+                <span class="text-sm font-semibold text-slate-700">EN</span>
+                <span class="text-[10px] text-slate-400 block">English</span>
+              </label>
+              <label class="podcast-lang-card flex-1 cursor-pointer glass-panel rounded-lg px-3 py-2 shadow-glass border-2 border-white/60 hover:border-violet-200 text-center transition-all">
+                <input type="radio" name="podcast-lang" value="nl" class="hidden">
+                <span class="text-sm font-semibold text-slate-700">NL</span>
+                <span class="text-[10px] text-slate-400 block">Nederlands</span>
+              </label>
+            </div>
+          </div>
+          <div>
+            <div class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold mb-2">Duration</div>
+            <div class="flex gap-1.5">
+              <label class="podcast-dur-card flex-1 cursor-pointer glass-panel rounded-lg px-2 py-2 shadow-glass border-2 border-white/60 hover:border-violet-200 text-center transition-all">
+                <input type="radio" name="podcast-duration" value="5" class="hidden">
+                <span class="text-sm font-semibold text-slate-700">5</span>
+                <span class="text-[10px] text-slate-400 block">min</span>
+              </label>
+              <label class="podcast-dur-card flex-1 cursor-pointer glass-panel rounded-lg px-2 py-2 shadow-glass border-2 border-violet-400 bg-violet-50/40 text-center transition-all">
+                <input type="radio" name="podcast-duration" value="10" class="hidden" checked>
+                <span class="text-sm font-semibold text-slate-700">10</span>
+                <span class="text-[10px] text-slate-400 block">min</span>
+              </label>
+              <label class="podcast-dur-card flex-1 cursor-pointer glass-panel rounded-lg px-2 py-2 shadow-glass border-2 border-white/60 hover:border-violet-200 text-center transition-all">
+                <input type="radio" name="podcast-duration" value="15" class="hidden">
+                <span class="text-sm font-semibold text-slate-700">15</span>
+                <span class="text-[10px] text-slate-400 block">min</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <button id="podcast-generate-btn" onclick="App.submitPodcast()"
+                class="w-full py-3 rounded-xl bg-gradient-to-r from-violet-500 to-purple-500 text-white text-center font-semibold text-sm hover:opacity-90 transition-opacity">
+          Generate Podcast
+        </button>
+      </div>
+
+      <!-- Progress (hidden until generation starts) -->
+      <div id="podcast-progress" class="hidden">
+        <div class="glass-panel rounded-xl p-4 shadow-glass border border-white/60">
+          <div class="flex items-center gap-3">
+            <div class="w-5 h-5 border-2 border-slate-200 border-t-violet-500 rounded-full flex-shrink-0" style="animation:spin 0.8s linear infinite"></div>
+            <div>
+              <div id="podcast-phase" class="text-sm font-medium text-slate-700">Generating script...</div>
+              <div id="podcast-script-preview" class="text-[11px] text-slate-400 mt-0.5 line-clamp-2"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Audio player (hidden until complete) -->
+      <div id="podcast-player" class="hidden">
+        <div class="glass-panel rounded-xl p-4 shadow-glass border border-violet-200 bg-gradient-to-br from-violet-50/60 to-purple-50/60">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="material-icons text-violet-500">podcasts</span>
+            <span class="text-sm font-semibold text-violet-700">Your Podcast is Ready</span>
+          </div>
+          <audio id="podcast-audio" controls class="w-full mb-2" style="border-radius:8px"></audio>
+          <a id="podcast-download" href="#" target="_blank"
+             class="flex items-center justify-center gap-1.5 w-full py-2 rounded-lg text-[11px] font-medium text-violet-600 border border-violet-200 hover:bg-violet-50 transition-colors">
+            <span class="material-icons text-sm">download</span>Download Audio
+          </a>
+        </div>
+      </div>
+
+      <!-- Error state -->
+      <div id="podcast-error" class="hidden">
+        <div class="glass-panel rounded-xl p-4 shadow-glass border border-red-200 bg-red-50/60">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-icons text-red-400 text-sm">error</span>
+            <span class="text-sm font-medium text-red-600">Podcast generation failed</span>
+          </div>
+          <p id="podcast-error-msg" class="text-[11px] text-red-500"></p>
+        </div>
+      </div>
+
+      <button onclick="App.showView('archive')"
+              class="w-full py-3 rounded-xl border border-slate-200 text-slate-500 text-center font-medium text-sm hover:bg-slate-50 transition-colors">
+        Back to Archive
+      </button>
+    </div>
+  </div>
+
+  <!-- ════════════ WATCHES VIEW ════════════ -->
+  <div id="view-watches" class="view flex-1" style="overflow-y:auto">
+    <header class="flex flex-col items-center mt-6 space-y-1 opacity-80">
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+      <p class="text-xs text-primary">Research Watches</p>
+    </header>
+    <div class="mt-4 px-2 pb-4">
+      <!-- Create watch form -->
+      <div class="glass-panel rounded-xl p-4 shadow-glass border border-white/60 mb-3">
+        <div class="text-[10px] uppercase tracking-widest text-slate-400 font-semibold mb-2">New Watch</div>
+        <input id="watch-query" type="text" placeholder="Topic to monitor..."
+               class="w-full px-3 py-2 rounded-lg bg-white/60 border border-slate-200 text-sm text-slate-700 placeholder-slate-400 focus:ring-1 focus:ring-primary mb-2">
+        <div class="flex gap-2">
+          <select id="watch-interval" class="flex-1 px-3 py-2 rounded-lg bg-white/60 border border-slate-200 text-sm text-slate-700">
+            <option value="6">Every 6 hours</option>
+            <option value="12">Every 12 hours</option>
+            <option value="24" selected>Daily</option>
+            <option value="168">Weekly</option>
+          </select>
+          <button onclick="App.createWatch()"
+                  class="px-4 py-2 rounded-lg bg-gradient-to-r from-primary to-cyan-400 text-white text-sm font-semibold hover:opacity-90 transition-opacity">
+            Create
+          </button>
+        </div>
+        <div class="mt-2 space-y-1">
+          <input id="watch-email" type="email" placeholder="Notification email (optional)"
+                 class="w-full px-3 py-1.5 rounded-lg bg-white/60 border border-slate-200 text-xs text-slate-600 placeholder-slate-300 focus:ring-1 focus:ring-primary">
+          <input id="watch-webhook" type="url" placeholder="Webhook URL - Slack/Discord (optional)"
+                 class="w-full px-3 py-1.5 rounded-lg bg-white/60 border border-slate-200 text-xs text-slate-600 placeholder-slate-300 focus:ring-1 focus:ring-primary">
+        </div>
+      </div>
+      <div id="watches-list" class="space-y-2"></div>
+    </div>
+  </div>
+
+  <!-- ════════════ ARCHIVE VIEW ════════════ -->
+  <div id="view-archive" class="view flex-1">
+    <header class="flex flex-col items-center mt-6 space-y-1 opacity-80">
+      <h1 class="text-sm tracking-widest uppercase font-light text-slate-500">Luminary</h1>
+      <p class="text-xs text-slate-400">Past Research</p>
+    </header>
+    <div id="archive-list" class="mt-4 space-y-2"></div>
+  </div>
+
+
+</main>
+
+<!-- ════════════ BOTTOM NAV ════════════ -->
+<nav id="bottom-nav" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50">
+  <div class="glass-panel px-4 py-3 rounded-full flex items-center justify-between w-[340px] shadow-glass relative">
+    <button class="nav-btn p-2 rounded-full hover:bg-slate-100 transition-colors group" data-view="archive" aria-label="Past research">
+      <span class="material-icons text-slate-400 group-hover:text-primary transition-colors text-xl">inventory_2</span>
+    </button>
+    <button class="nav-btn p-2 rounded-full hover:bg-slate-100 transition-colors group" data-view="graph" aria-label="Knowledge graph">
+      <span class="material-icons text-slate-400 group-hover:text-primary transition-colors text-xl">hub</span>
+    </button>
+    <!-- Center raised talk-to-agents button -->
+    <button class="nav-btn relative -top-6 p-4 rounded-full bg-gradient-to-b from-white to-slate-100 shadow-lg border border-slate-100 group hover:-translate-y-1 transition-transform duration-300" data-view="chat" aria-label="Talk to agents">
+      <div class="absolute inset-0 bg-primary/20 blur-md rounded-full group-hover:bg-primary/40 transition-colors"></div>
+      <div class="relative z-10 w-10 h-10 flex items-center justify-center">
+        <div class="w-full flex items-center justify-center gap-[2px] h-4">
+          <div class="w-[3px] bg-primary rounded-full" style="height:100%;animation:pulse-bar 1s ease-in-out infinite"></div>
+          <div class="w-[3px] bg-primary rounded-full" style="height:80%;animation:pulse-bar 1.2s ease-in-out infinite 0.1s"></div>
+          <div class="w-[3px] bg-primary rounded-full" style="height:60%;animation:pulse-bar 0.8s ease-in-out infinite 0.2s"></div>
+          <div class="w-[3px] bg-primary rounded-full" style="height:90%;animation:pulse-bar 1.1s ease-in-out infinite 0.3s"></div>
+        </div>
+      </div>
+    </button>
+    <button class="nav-btn p-2 rounded-full hover:bg-slate-100 transition-colors group" data-view="watches" aria-label="Watches">
+      <span class="material-icons text-slate-400 group-hover:text-primary transition-colors text-xl">visibility</span>
+    </button>
+    <button class="nav-btn p-2 rounded-full hover:bg-slate-100 transition-colors group" data-view="home" aria-label="Home">
+      <span class="material-icons text-slate-400 group-hover:text-primary transition-colors text-xl">home</span>
+    </button>
+  </div>
+</nav>
+
+<!-- Persistent active-job chip — visible on every view (except progress) while a job runs -->
+<button id="active-job-chip" onclick="App.viewActiveJob()" aria-label="View running research"
+        class="hidden fixed top-3 left-1/2 -translate-x-1/2 z-40 max-w-[92%] flex items-center gap-2 px-4 py-2 rounded-full bg-primary text-white shadow-lg active:scale-95 transition-transform">
+  <span class="w-2 h-2 rounded-full bg-white/90" style="animation:pulse-bar 1s ease-in-out infinite"></span>
+  <span id="active-job-chip-text" class="text-xs font-medium truncate" style="max-width:220px">Research running…</span>
+  <span class="material-icons text-base">arrow_forward</span>
+</button>
+
+<!-- ════════════ CALL OVERLAY ════════════ -->
+<div id="call-overlay" class="widget-overlay" role="dialog" aria-modal="true" aria-label="Voice call">
+  <div class="flex flex-col items-center justify-between h-full max-w-sm w-full py-16 px-6">
+    <!-- Agent info -->
+    <div class="flex flex-col items-center">
+      <div class="w-24 h-24 rounded-full bg-white/80 shadow-neumorphic flex items-center justify-center mb-4 relative">
+        <span id="call-agent-icon" class="material-icons text-4xl text-primary">bolt</span>
+        <!-- Pulsing ring when connected -->
+        <div id="call-pulse-ring" class="absolute inset-0 rounded-full border-2 border-primary/40 hidden" style="animation:spin 3s linear infinite"></div>
+      </div>
+      <div id="call-agent-name" class="text-xl font-semibold text-slate-700"></div>
+      <div id="call-agent-subtitle" class="text-xs text-slate-400 mt-1"></div>
+    </div>
+
+    <!-- Status + timer -->
+    <div class="flex flex-col items-center gap-3">
+      <div id="call-status" class="flex items-center gap-2">
+        <div id="call-status-dot" class="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse"></div>
+        <span id="call-status-text" class="text-sm text-slate-500">Connecting...</span>
+      </div>
+      <div id="call-timer" class="text-2xl font-mono font-light text-slate-400 tabular-nums hidden">0:00</div>
+      <!-- Audio bars visualization -->
+      <div id="call-audio-viz" class="flex items-end justify-center gap-[3px] h-8 hidden">
+        <div class="w-[4px] bg-primary/60 rounded-full" style="height:40%;animation:pulse-bar 0.8s ease-in-out infinite"></div>
+        <div class="w-[4px] bg-primary/60 rounded-full" style="height:70%;animation:pulse-bar 1.0s ease-in-out infinite 0.1s"></div>
+        <div class="w-[4px] bg-primary/60 rounded-full" style="height:100%;animation:pulse-bar 0.7s ease-in-out infinite 0.2s"></div>
+        <div class="w-[4px] bg-primary/60 rounded-full" style="height:60%;animation:pulse-bar 0.9s ease-in-out infinite 0.15s"></div>
+        <div class="w-[4px] bg-primary/60 rounded-full" style="height:80%;animation:pulse-bar 1.1s ease-in-out infinite 0.25s"></div>
+      </div>
+      <!-- Error message -->
+      <div id="call-error" class="text-sm text-red-400 text-center hidden"></div>
+    </div>
+
+    <!-- Call controls -->
+    <div class="flex items-center justify-center gap-6">
+      <button id="call-mute-btn" onclick="App.toggleMute()" aria-label="Mute microphone"
+              class="w-14 h-14 rounded-full bg-white/80 shadow-inner-chrome flex items-center justify-center active:scale-95 transition-transform hidden">
+        <span id="call-mute-icon" class="material-icons text-slate-600 text-2xl">mic</span>
+      </button>
+      <button id="call-end-btn" onclick="App.endCall()" aria-label="End call"
+              class="w-16 h-16 rounded-full bg-red-500 flex items-center justify-center shadow-lg hover:bg-red-600 active:scale-95 transition-all">
+        <span class="material-icons text-white text-3xl">call_end</span>
+      </button>
+      <button id="call-reconnect-btn" onclick="App.reconnectCall()" aria-label="Reconnect"
+              class="w-14 h-14 rounded-full bg-emerald-500 flex items-center justify-center shadow-lg hover:bg-emerald-600 active:scale-95 transition-transform hidden">
+        <span class="material-icons text-white text-2xl">refresh</span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- Research picker — choose which research to attach before calling -->
+<div id="research-picker-overlay" class="widget-overlay" role="dialog" aria-modal="true" aria-label="Select research">
+  <div class="flex flex-col h-full max-w-md w-full py-10 px-5">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <div class="text-[11px] uppercase tracking-widest text-primary/70 font-semibold">Select Research</div>
+        <div id="picker-agent-name" class="text-xl font-semibold text-slate-700">Agent</div>
+      </div>
+      <button onclick="App.closeResearchPicker()" aria-label="Close"
+              class="w-12 h-12 rounded-full bg-white/80 shadow-inner-chrome flex items-center justify-center active:scale-95 transition-transform">
+        <span class="material-icons text-slate-500">close</span>
+      </button>
+    </div>
+    <div id="picker-list" class="flex-1 overflow-y-auto space-y-3"></div>
+  </div>
+</div>
+
+<!-- Confirm dialog (promise-based; replaces blocking confirm()) -->
+<div id="confirm-overlay" class="widget-overlay" style="z-index:70" role="dialog" aria-modal="true" aria-labelledby="confirm-message">
+  <div class="glass-panel max-w-xs w-full rounded-2xl p-6 border border-white/60 shadow-glass mx-4">
+    <div id="confirm-message" class="text-sm text-slate-700 mb-5 text-center"></div>
+    <div class="flex gap-3">
+      <button id="confirm-cancel" class="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-500 text-sm font-medium active:scale-95 transition-transform">Cancel</button>
+      <button id="confirm-ok" class="flex-1 py-2.5 rounded-xl bg-red-500 text-white text-sm font-semibold active:scale-95 transition-transform">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

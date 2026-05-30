@@ -1,0 +1,11 @@
+.git
+.gitignore
+.gcloudignore
+.env
+.venv/
+__pycache__/
+*.pyc
+NUL
+explore/node_modules/
+explore/dist/
+explore/.observablehq/
